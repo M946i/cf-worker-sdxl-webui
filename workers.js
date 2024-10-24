@@ -12,7 +12,7 @@ export default {
   },
 };
 
-// 处理图像生成请求
+// 处理图像生成请求，并设置120秒的超时
 async function handleGenerateImageRequest(request, env) {
   const body = await request.json();
 
@@ -31,13 +31,28 @@ async function handleGenerateImageRequest(request, env) {
     seed: body.seed || undefined,
   };
 
-  const response = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', inputs);
+  // 超时设置为120秒
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120秒超时
 
-  return new Response(response, {
-    headers: {
-      'Content-Type': 'image/png',
-    },
-  });
+  try {
+    const response = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', inputs, {
+      signal: controller.signal,
+    });
+
+    return new Response(response, {
+      headers: {
+        'Content-Type': 'image/png',
+      },
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      return new Response('Request timed out', { status: 504 });
+    }
+    return new Response('Error generating image', { status: 500 });
+  } finally {
+    clearTimeout(timeoutId); // 清除超时
+  }
 }
 
 // 返回美化后的 HTML 页面
@@ -50,86 +65,86 @@ function renderHtml() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Stable Diffusion Image Generator</title>
     <style>
-  html, body {
-    height: auto;
-    overflow: auto;
-  }
+      html, body {
+        height: auto;
+        overflow: auto;
+      }
 
-  body {
-    font-family: Arial, sans-serif;
-    background-color: #f0f0f0;
-    color: #333;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-  }
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f0f0f0;
+        color: #333;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+      }
 
-  .container {
-    background-color: white;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    width: 500px;
-    margin: 20px auto;
-  }
+      .container {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        width: 500px;
+        margin: 20px auto;
+      }
 
-  h1 {
-    text-align: center;
-    margin-bottom: 20px;
-  }
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+      }
 
-  label {
-    display: block;
-    margin-top: 10px;
-    font-weight: bold;
-  }
+      label {
+        display: block;
+        margin-top: 10px;
+        font-weight: bold;
+      }
 
-  input, textarea {
-    width: 95%;
-    padding: 10px;
-    margin-top: 5px;
-    border: 1px solid #ddd;
-    border-radius: 5px;
-    margin-bottom: 10px;
-  }
+      input, textarea {
+        width: 95%;
+        padding: 10px;
+        margin-top: 5px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        margin-bottom: 10px;
+      }
 
-  button {
-    width: 100%;
-    padding: 10px;
-    background-color: #007BFF;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    font-size: 16px;
-    cursor: pointer;
-  }
+      button {
+        width: 100%;
+        padding: 10px;
+        background-color: #007BFF;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        font-size: 16px;
+        cursor: pointer;
+      }
 
-  button:hover {
-    background-color: #0056b3;
-  }
+      button:hover {
+        background-color: #0056b3;
+      }
 
-  .optional-label {
-    font-size: 0.9em;
-    color: gray;
-  }
+      .optional-label {
+        font-size: 0.9em;
+        color: gray;
+      }
 
-  #loading {
-    display: none;
-    margin-top: 20px;
-    text-align: center;
-    font-size: 16px;
-    color: #007BFF;
-  }
+      #loading {
+        display: none;
+        margin-top: 20px;
+        text-align: center;
+        font-size: 16px;
+        color: #007BFF;
+      }
 
-  #generatedImage {
-    margin-top: 20px;
-    max-width: 100%;
-    border-radius: 10px;
-  }
-  </style>
+      #generatedImage {
+        margin-top: 20px;
+        max-width: 100%;
+        border-radius: 10px;
+      }
+    </style>
   </head>
   <body>
     <div class="container">
@@ -173,6 +188,21 @@ function renderHtml() {
       const loadingText = document.getElementById('loading');
       const generatedImage = document.getElementById('generatedImage');
 
+      async function fetchWithTimeout(url, options = {}, timeout = 120000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        options.signal = controller.signal;
+
+        try {
+          const response = await fetch(url, options);
+          clearTimeout(timeoutId);
+          return response;
+        } catch (error) {
+          clearTimeout(timeoutId);
+          throw error;
+        }
+      }
+
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
 
@@ -191,7 +221,7 @@ function renderHtml() {
         generatedImage.style.display = 'none';
 
         try {
-          const response = await fetch('/generate-image', {
+          const response = await fetchWithTimeout('/generate-image', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -206,7 +236,7 @@ function renderHtml() {
               strength: strength ? parseFloat(strength) : null,
               seed: seed ? parseInt(seed, 10) : null,
             }),
-          });
+          }, 120000);
 
           if (!response.ok) {
             throw new Error('Failed to generate image');
